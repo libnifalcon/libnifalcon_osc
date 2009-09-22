@@ -11,11 +11,11 @@ libnifalcon_osc is a simple server application for accessing the Novint Falcon t
 ## Requirements ##
 
 * cmake
-  * (http://www.cmake.org)
+  * http://www.cmake.org
 * libnifalcon (libnifalcon and libnifalcon\_cli\_base classes required)
-  * (http://libnifalcon.nonpolynomial.com)
+  * http://libnifalcon.nonpolynomial.com
 * liblo
-  * (http://liblo.sourceforge.net)
+  * http://liblo.sourceforge.net
 
 ## Applications Tested ##
 
