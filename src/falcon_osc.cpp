@@ -5,6 +5,7 @@
 #include <falcon/core/FalconDevice.h>
 #include <falcon/firmware/FalconFirmwareNovintSDK.h>
 #include <falcon/util/FalconFirmwareBinaryNvent.h>
+#include <falcon/util/FalconCLIBase.h>
 #include <falcon/kinematic/FalconKinematicStamper.h>
 
 #include <stdio.h>
@@ -13,12 +14,20 @@
 
 #include <lo/lo.h>
 
-libnifalcon::FalconDevice dev;
+using namespace libnifalcon;
+namespace po = boost::program_options;
 
-bool quit = false;
+bool stop = false;
 
-lo_server los = 0;
-lo_address loaddr = 0;
+void sigproc(int i)
+{
+	if(!stop)
+	{
+		stop = true;
+		std::cout << "Quitting" << std::endl;
+	}
+	else exit(0);
+}
 
 boost::array<double, 3> force;
 
@@ -30,89 +39,87 @@ int force_handler(const char *path, const char *types, lo_arg **argv,
     force[2] = argv[2]->f;
 }
 
-void on_quit(int)
+class FalconOSC : public FalconCLIBase
 {
-    quit = true;
-}
+public:
+	void addOptions(int value)
+	{
+		FalconCLIBase::addOptions(value);
+		po::options_description osc("OSC Options");
+		osc.add_options()
+			("osc_host", "Host address")
+			("osc_out_port", "Port for OSC message output")
+			("osc_in_port", "Port for OSC message input");
+		m_progOptions.add(osc);
+	}
 
-int main(int argc, char *argv[])
+	bool parseOptions(int argc, char** argv)
+	{
+		if(!FalconCLIBase::parseOptions(argc, argv)) return false;
+		m_falconDevice->setFalconKinematic<libnifalcon::FalconKinematicStamper>();
+
+		const char *listen_port = "9001";
+		const char *port = "57120";
+		const char *host = "localhost";
+		lo_server los = 0;
+		lo_address loaddr = 0;
+
+		if(m_varMap.count("osc_host"))
+		{
+			host = m_varMap["osc_host"].as<std::string>().c_str();
+		}
+		if(m_varMap.count("osc_out_port"))
+		{
+			port = m_varMap["osc_out_port"].as<std::string>().c_str();
+		}
+		if(m_varMap.count("osc_in_port"))
+		{
+			listen_port = m_varMap["osc_in_port"].as<std::string>().c_str();
+		}
+
+		loaddr = lo_address_new(host, port);
+		los = lo_server_new(listen_port, 0);
+		if (!loaddr || !los) {
+			printf("Could not initialize OSC server.\n");
+			if (loaddr) lo_address_free(loaddr);
+			if (los) lo_server_free(los);
+			return false;
+		}
+
+		lo_server_add_method(los, "/falcon/force", "fff", force_handler, 0);
+
+		printf("Running.\n");
+		while (!stop)
+		{
+			if(m_falconDevice->runIOLoop())
+			{
+				boost::array<double, 3> pos = m_falconDevice->getPosition();
+				lo_send(loaddr, "/falcon/position", "fff", pos[0], pos[1], pos[2]);
+				lo_server_recv_noblock(los, 0);
+				m_falconDevice->setForce(force);			
+			}
+		}
+
+		lo_address_free(loaddr);
+		loaddr = 0;
+		lo_server_free(los);
+		los = 0;
+
+
+		return true;
+	}
+};
+	
+int main(int argc, char** argv)
 {
-    const char *listen_port = "9001";
-    const char *port = "9000";
-    const char *host = "localhost";
-    int i;
 
-    for (i=1; (i+1) < argc; i+=2)
-    {
-        if (strcmp(argv[i],"--host")==0)
-            host = argv[i+1];
-        if (strcmp(argv[i],"--port")==0)
-            port = argv[i+1];
-        if (strcmp(argv[i],"--listen_port")==0)
-            listen_port = argv[i+1];
-    }
-
-    printf("Initializing OSC server.\n");
-
-    loaddr = lo_address_new(host, port);
-    los = lo_server_new(listen_port, 0);
-    if (!loaddr || !los) {
-        printf("Could not initialize OSC server.\n");
-        if (loaddr) lo_address_free(loaddr);
-        if (los) lo_server_free(los);
-        return -1;
-    }
-
-    lo_server_add_method(los, "/falcon/force", "fff", force_handler, 0);
-
-    printf("Initializing device.\n");
-
-    dev.setFalconFirmware<libnifalcon::FalconFirmwareNovintSDK>();
-    if (!dev.open(0)) {
-        printf("Couldn't open device 0.\n");
-        return 1;
-    }
-
-    printf("Uploading firmware.\n");
-    for (i=0; i<10; i++) {
-        if (dev.getFalconFirmware()->loadFirmware(
-                true, libnifalcon::NOVINT_FALCON_NVENT_FIRMWARE_SIZE,
-                const_cast<uint8_t*>(libnifalcon::NOVINT_FALCON_NVENT_FIRMWARE))
-            && dev.isFirmwareLoaded())
-            break;
-        printf(".");
-        fflush(stdout);
-    }
-
-    if (i==10) {
-        printf("Couldn't upload device firmware.\n");
-
-        printf("Error Code: %d\n", dev.getErrorCode());
-        if (dev.getErrorCode() == 2000)
-            printf("Device Error Code: %d\n",
-                   dev.getFalconComm()->getDeviceErrorCode());
-
-        return 2;
-    }
-
-    dev.setFalconKinematic<libnifalcon::FalconKinematicStamper>();
-
-    signal(SIGINT, on_quit);
-
-    printf("Running.\n");
-    while (!quit)
-    {
-        dev.runIOLoop();
-		boost::array<double, 3> pos = dev.getPosition();
-        lo_send(loaddr, "/falcon/position", "fff", pos[0], pos[1], pos[2]);
-        lo_server_recv_noblock(los, 0);
-        dev.setForce(force);
-    }
-
-    lo_address_free(loaddr);
-    loaddr = 0;
-    lo_server_free(los);
-    los = 0;
-
-    return 0;
+	signal(SIGINT, sigproc);
+#ifndef WIN32
+	signal(SIGQUIT, sigproc);
+#endif
+	
+	FalconOSC f;
+	f.addOptions(FalconOSC::DEVICE_OPTIONS | FalconOSC::COMM_OPTIONS | FalconOSC::FIRMWARE_OPTIONS);
+	f.parseOptions(argc, argv);
+	return 0;
 }
