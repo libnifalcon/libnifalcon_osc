@@ -1,0 +1,45 @@
+{\rtf1\ansi\ansicpg1252\cocoartf949\cocoasubrtf460
+{\fonttbl\f0\fnil\fcharset0 Monaco;}
+{\colortbl;\red255\green255\blue255;}
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\ql\qnatural\pardirnatural
+
+\f0\fs18 \cf0 (	\
+	// Assume we're sending to the usual SC port (57120)\
+	// Listening port for output will be 9001\
+	~addr = NetAddr.new("localhost", 9001);\
+\
+	// Code for clocking I/O. We want to be as near 1khz as possible,\
+	// so make sure we get 1000 loops as close to 1.0s as we can\
+	~beatClock = TempoClock.new(1000);\
+	~updateTime = ~beatClock.seconds;\
+	~count = 0;\
+	~time_function = \{ \
+		~count = 0;\
+		(~beatClock.seconds - ~updateTime).postln;\
+		~updateTime = ~beatClock.seconds;\
+	\};\
+\
+	// Create a force on the z-axis, starting about halfway \
+	// into the workspace. Scale it proportionally\
+	~wall_limit = 0.12;\
+	~wall_function = \{ arg time, resp, msg;\
+		if(msg[3] > ~wall_limit,\
+			\{ ~addr.sendMsg("/falcon/force", 0.0, 0.0, 0.0) \},\
+			\{ ~addr.sendMsg("/falcon/force", 0.0, 0.0, (msg[3] - ~wall_limit) * -1000.0) \}\
+			);\
+		// Every thousand loops, run the time update function \
+		if(~count == 1000,\
+		~time_function,\
+		\{ ~count = ~count + 1; \});\
+	\};		\
+	\
+	//Set up the OSC message receiver\
+	~osc = OSCresponder.new(~addr, "/falcon/position", ~wall_function);\
+\
+	//Add to start\
+	~osc.add;\
+	\
+	//Remove to stop\
+	~osc.remove;\
+);\
+}
